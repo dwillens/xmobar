@@ -17,34 +17,50 @@ module Parsers
     ( parseString
     , parseTemplate
     , parseConfig
+    , Widget(..)
     ) where
 
 import Config
 import Runnable
 import Commands
+import Actions
 
 import qualified Data.Map as Map
 import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Perm
 
+data Widget = Icon String | Text String
+
+type ColorString = String
+
 -- | Runs the string parser
-parseString :: Config -> String -> IO [(String, String)]
+parseString :: Config -> String -> IO [(Widget, ColorString, Maybe Action)]
 parseString c s =
-    case parse (stringParser (fgColor c)) "" s of
-      Left  _ -> return [("Could not parse string: " ++ s, fgColor c)]
+    case parse (stringParser (fgColor c) Nothing) "" s of
+      Left  _ -> return [(Text $ "Could not parse string: " ++ s
+                          , fgColor c
+                          , Nothing)]
       Right x -> return (concat x)
 
 -- | Gets the string and combines the needed parsers
-stringParser :: String -> Parser [[(String, String)]]
-stringParser c = manyTill (textParser c <|> colorParser) eof
+stringParser :: String -> Maybe Action
+                -> Parser [[(Widget, ColorString, Maybe Action)]]
+stringParser c a = manyTill (textParser c a <|> try (iconParser c a) <|>
+                             try (actionParser c) <|> colorParser a) eof
 
 -- | Parses a maximal string without color markup.
-textParser :: String -> Parser [(String, String)]
-textParser c = do s <- many1 $
-                    noneOf "<" <|>
-                    ( try $ notFollowedBy' (char '<')
-                                           (string "fc=" <|> string "/fc>" ) )
-                  return [(s, c)]
+textParser :: String -> Maybe Action
+              -> Parser [(Widget, ColorString, Maybe Action)]
+textParser c a = do s <- many1 $
+                          noneOf "<" <|>
+                            try (notFollowedBy' (char '<')
+                                  (try (string "fc=")  <|>
+                                   try (string "action=") <|>
+                                   try (string "/action>") <|>
+                                   try (string "icon=") <|>
+                                   string "/fc>"))
+                    return [(Text s, c, a)]
+
 
 -- | Wrapper for notFollowedBy that returns the result of the first parser.
 --   Also works around the issue that, at least in Parsec 3.0.0, notFollowedBy
@@ -54,11 +70,28 @@ notFollowedBy' p e = do x <- p
                         notFollowedBy $ try (e >> return '*')
                         return x
 
+iconParser :: String -> Maybe Action
+              -> Parser [(Widget, ColorString, Maybe Action)]
+iconParser c a = do
+  string "<icon="
+  i <- manyTill (noneOf ">") (try (string "/>"))
+  return [(Icon i, c, a)]
+
+actionParser :: String -> Parser [(Widget, ColorString, Maybe Action)]
+actionParser c = do
+  a <- between (string "<action=") (string ">") (many1 (noneOf ">"))
+  let a' = Just (Spawn a)
+  s <- manyTill (try (textParser c a') <|> try (iconParser c a') <|>
+                 try (colorParser a') <|> actionParser c)
+                (try $ string "</action>")
+  return (concat s)
+
 -- | Parsers a string wrapped in a color specification.
-colorParser :: Parser [(String, String)]
-colorParser = do
+colorParser :: Maybe Action -> Parser [(Widget, ColorString, Maybe Action)]
+colorParser a = do
   c <- between (string "<fc=") (string ">") colors
-  s <- manyTill (textParser c <|> colorParser) (try $ string "</fc>")
+  s <- manyTill (try (textParser c a) <|> try (iconParser c a) <|>
+                 try (colorParser a) <|> actionParser c) (try $ string "</fc>")
   return (concat s)
 
 -- | Parses a color specification (hex or named)
@@ -95,7 +128,8 @@ parseTemplate c s =
 
 -- | Given a finite "Map" and a parsed template produce the resulting
 -- output string.
-combine :: Config -> Map.Map String Runnable -> [(String, String, String)] -> [(Runnable,String,String)]
+combine :: Config -> Map.Map String Runnable
+           -> [(String, String, String)] -> [(Runnable,String,String)]
 combine _ _ [] = []
 combine c m ((ts,s,ss):xs) = (com, s, ss) : combine c m xs
     where com  = Map.findWithDefault dflt ts m
@@ -105,7 +139,8 @@ allTillSep :: Config -> Parser String
 allTillSep = many . noneOf . sepChar
 
 stripComments :: String -> String
-stripComments = unlines . map (drop 5 . strip False . (replicate 5 ' '++)) . lines
+stripComments =
+  unlines . map (drop 5 . strip False . (replicate 5 ' '++)) . lines
     where strip m ('-':'-':xs) = if m then "--" ++ strip m xs else ""
           strip m ('\\':xss) = case xss of
                                 '\\':xs -> '\\' : strip m xs
@@ -128,33 +163,34 @@ parseConfig = runParser parseConf fields "Config" . stripComments
         return (x,s)
 
       perms = permute $ Config
-              <$?> pFont         <|?> pBgColor
-              <|?> pFgColor      <|?> pPosition
-              <|?> pBorder       <|?> pBdColor
-              <|?> pHideOnStart  <|?> pLowerOnStart
-              <|?> pPersistent   <|?> pCommands
-              <|?> pSepChar      <|?> pAlignSep
-              <|?> pTemplate
+              <$?> pFont <|?> pBgColor <|?> pFgColor <|?> pPosition
+              <|?> pBorder <|?> pBdColor <|?> pHideOnStart <|?> pAllDesktops
+              <|?> pOverrideRedirect <|?> pLowerOnStart <|?> pPersistent
+              <|?> pCommands <|?> pSepChar <|?> pAlignSep <|?> pTemplate
 
       fields    = [ "font", "bgColor", "fgColor", "sepChar", "alignSep"
                   , "border", "borderColor" ,"template", "position"
+                  , "allDesktops", "overrideRedirect"
                   , "hideOnStart", "lowerOnStart", "persistent", "commands"
                   ]
 
-      pFont     = strField font     "font"
-      pBgColor  = strField bgColor  "bgColor"
-      pFgColor  = strField fgColor  "fgColor"
-      pBdColor  = strField borderColor "borderColor"
-      pSepChar  = strField sepChar  "sepChar"
+      pFont = strField font "font"
+      pBgColor = strField bgColor "bgColor"
+      pFgColor = strField fgColor "fgColor"
+      pBdColor = strField borderColor "borderColor"
+      pSepChar = strField sepChar "sepChar"
       pAlignSep = strField alignSep "alignSep"
       pTemplate = strField template "template"
 
-      pPosition     = field position     "position"     $ tillFieldEnd >>= read' "position"
-      pHideOnStart  = field hideOnStart  "hideOnStart"  $ tillFieldEnd >>= read' "hideOnStart"
-      pLowerOnStart = field lowerOnStart "lowerOnStart" $ tillFieldEnd >>= read' "lowerOnStart"
-      pPersistent   = field persistent   "persistent"   $ tillFieldEnd >>= read' "persistent"
-      pBorder       = field border       "border"       $ tillFieldEnd >>= read' "border"
-      pCommands     = field commands     "commands"     $ readCommands
+      pPosition = readField position "position"
+      pHideOnStart = readField hideOnStart "hideOnStart"
+      pLowerOnStart = readField lowerOnStart "lowerOnStart"
+      pPersistent = readField persistent "persistent"
+      pBorder = readField border "border"
+      pAllDesktops = readField allDesktops "allDesktops"
+      pOverrideRedirect = readField overrideRedirect "overrideRedirect"
+
+      pCommands = field commands "commands" readCommands
 
       staticPos = do string "Static"
                      wrapSkip (string "{")
@@ -165,12 +201,18 @@ parseConfig = runParser parseConf fields "Config" . stripComments
       tillFieldEnd = staticPos <|> many (noneOf ",}\n\r")
 
       commandsEnd  = wrapSkip (string "]") >> (string "}" <|> notNextRun)
-      notNextRun = do { string ","; notFollowedBy $ wrapSkip $ string "Run"; return ","} 
-      readCommands = manyTill anyChar (try commandsEnd) >>= read' commandsErr . flip (++) "]"
+      notNextRun = do {string ","
+                      ; notFollowedBy $ wrapSkip $ string "Run"
+                      ; return ","
+                      }
+      readCommands = manyTill anyChar (try commandsEnd) >>=
+                        read' commandsErr . flip (++) "]"
 
-      strField e n = field e n . between (strDel "start" n) (strDel "end" n) . many $ noneOf "\"\n\r"
-      strDel   t n = char '"' <?> strErr t n
-      strErr   t n = "the " ++ t ++ " of the string field " ++ n ++ " - a double quote (\")."
+      strField e n = field e n . between (strDel "start" n) (strDel "end" n) .
+                     many $ noneOf "\"\n\r"
+      strDel t n = char '"' <?> strErr t n
+      strErr t n = "the " ++ t ++ " of the string field " ++ n ++
+                       " - a double quote (\")."
 
       wrapSkip   x = many space >> x >>= \r -> many space >> return r
       sepEndSpc    = mapM_ (wrapSkip . try . string)
@@ -178,12 +220,13 @@ parseConfig = runParser parseConf fields "Config" . stripComments
       field  e n c = (,) (e defaultConfig) $
                      updateState (filter (/= n)) >> sepEndSpc [n,"="] >>
                      wrapSkip c >>= \r -> fieldEnd >> return r
-
+      readField a n = field a n $ tillFieldEnd >>= read' n
       read' d s = case reads s of
                     [(x, _)] -> return x
-                    _        -> fail $ "error reading the " ++ d ++ " field: " ++ s
+                    _ -> fail $ "error reading the " ++ d ++ " field: " ++ s
 
 commandsErr :: String
-commandsErr = "commands: this usually means that a command could not be parsed.\n" ++
-              "The error could be located at the begining of the command which follows the offending one."
-
+commandsErr = "commands: this usually means that a command could not" ++
+              "\nbe parsed." ++
+              "\nThe error could be located at the begining of the command" ++
+              "\nwhich follows the offending one."

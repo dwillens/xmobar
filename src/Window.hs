@@ -1,7 +1,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Window
--- Copyright   :  (c) 2011-12 Jose A. Ortega Ruiz
+-- Copyright   :  (c) 2011-13 Jose A. Ortega Ruiz
 --             :  (c) 2012 Jochen Keil
 -- License     :  BSD-style (see LICENSE)
 --
@@ -16,10 +16,11 @@
 module Window where
 
 import Prelude
-import Control.Monad (when)
+import Control.Monad (when, unless)
 import Graphics.X11.Xlib hiding (textExtents, textWidth)
 import Graphics.X11.Xlib.Extras
 import Graphics.X11.Xinerama
+import Foreign.C.Types (CLong)
 
 import Data.Maybe(fromMaybe)
 import System.Posix.Process (getProcessID)
@@ -33,79 +34,93 @@ import XUtil
 createWin :: Display -> XFont -> Config -> IO (Rectangle,Window)
 createWin d fs c = do
   let dflt = defaultScreen d
-  srs     <- getScreenInfo d
-  rootw   <- rootWindow d dflt
+  srs <- getScreenInfo d
+  rootw <- rootWindow d dflt
   (as,ds) <- textExtents fs "0"
-  let ht    = as + ds + 4
-      (r,o) = setPosition (position c) srs (fi ht)
-  win <- newWindow  d (defaultScreenOfDisplay d) rootw r o
-  setProperties r c d win srs
-  when (lowerOnStart c) (lowerWindow d win)
-  when (not $ hideOnStart c) $ showWindow r c d win
+  let ht = as + ds + 4
+      r = setPosition (position c) srs (fi ht)
+  win <- newWindow  d (defaultScreenOfDisplay d) rootw r (overrideRedirect c)
+  setProperties c d win
+  setStruts r c d win srs
+  when (lowerOnStart c) $ lowerWindow d win
+  unless (hideOnStart c) $ showWindow r c d win
   return (r,win)
 
 -- | Updates the size and position of the window
 repositionWin :: Display -> Window -> XFont -> Config -> IO Rectangle
 repositionWin d win fs c = do
-  srs     <- getScreenInfo d
+  srs <- getScreenInfo d
   (as,ds) <- textExtents fs "0"
-  let ht    = as + ds + 4
-      (r,_) = setPosition (position c) srs (fi ht)
+  let ht = as + ds + 4
+      r = setPosition (position c) srs (fi ht)
   moveResizeWindow d win (rect_x r) (rect_y r) (rect_width r) (rect_height r)
-  setProperties r c d win srs
+  setStruts r c d win srs
   return r
 
-setPosition :: XPosition -> [Rectangle] -> Dimension -> (Rectangle,Bool)
+setPosition :: XPosition -> [Rectangle] -> Dimension -> Rectangle
 setPosition p rs ht =
   case p' of
-    Top -> (Rectangle rx ry rw h, True)
-    TopP l r -> (Rectangle (rx + fi l) ry (rw - fi l - fi r) h, True)
-    TopW a i -> (Rectangle (ax a i) ry (nw i) h, True)
-    TopSize a i ch -> (Rectangle (ax a i) ry (nw i) (mh ch), True)
-    Bottom -> (Rectangle rx ny rw h, True)
-    BottomW a i -> (Rectangle (ax a i) ny (nw i) h, True)
-    BottomP l r -> (Rectangle (rx + fi l) ny (rw - fi l - fi r) h, True)
-    BottomSize a i ch  -> (Rectangle (ax a i) (ny' ch) (nw i) (mh ch), True)
-    Static cx cy cw ch -> (Rectangle (fi cx) (fi cy) (fi cw) (fi ch), True)
+    Top -> Rectangle rx ry rw h
+    TopP l r -> Rectangle (rx + fi l) ry (rw - fi l - fi r) h
+    TopW a i -> Rectangle (ax a i) ry (nw i) h
+    TopSize a i ch -> Rectangle (ax a i) ry (nw i) (mh ch)
+    Bottom -> Rectangle rx ny rw h
+    BottomW a i -> Rectangle (ax a i) ny (nw i) h
+    BottomP l r -> Rectangle (rx + fi l) ny (rw - fi l - fi r) h
+    BottomSize a i ch  -> Rectangle (ax a i) (ny' ch) (nw i) (mh ch)
+    Static cx cy cw ch -> Rectangle (fi cx) (fi cy) (fi cw) (fi ch)
     OnScreen _ p'' -> setPosition p'' [scr] ht
   where
     (scr@(Rectangle rx ry rw rh), p') =
       case p of OnScreen i x -> (fromMaybe (head rs) $ safeIndex i rs, x)
                 _ -> (head rs, p)
-    ny       = ry + fi (rh - ht)
+    ny = ry + fi (rh - ht)
     center i = rx + fi (div (remwid i) 2)
     right  i = rx + fi (remwid i)
     remwid i = rw - pw (fi i)
-    ax L     = const rx
-    ax R     = right
-    ax C     = center
-    pw i     = rw * min 100 i `div` 100
-    nw       = fi . pw . fi
-    h        = fi ht
-    mh h'    = max (fi h') h
-    ny' h'   = ry + fi (rh - mh h')
+    ax L = const rx
+    ax R = right
+    ax C = center
+    pw i = rw * min 100 i `div` 100
+    nw = fi . pw . fi
+    h = fi ht
+    mh h' = max (fi h') h
+    ny' h' = ry + fi (rh - mh h')
     safeIndex i = lookup i . zip [0..]
 
-setProperties :: Rectangle -> Config -> Display -> Window -> [Rectangle] -> IO ()
-setProperties r c d w srs = do
-  a1 <- internAtom d "_NET_WM_STRUT_PARTIAL"    False
-  c1 <- internAtom d "CARDINAL"                 False
-  a2 <- internAtom d "_NET_WM_WINDOW_TYPE"      False
-  c2 <- internAtom d "ATOM"                     False
-  v  <- internAtom d "_NET_WM_WINDOW_TYPE_DOCK" False
-  p  <- internAtom d "_NET_WM_PID"              False
+setProperties :: Config -> Display -> Window -> IO ()
+setProperties c d w = do
+  let mkatom n = internAtom d n False
+  card <- mkatom "CARDINAL"
+  atom <- mkatom "ATOM"
 
   setTextProperty d w "xmobar" wM_CLASS
   setTextProperty d w "xmobar" wM_NAME
 
-  ismapped <- isMapped d w
-  changeProperty32 d w a1 c1 propModeReplace $
-    if ismapped
-        then map fi $ getStrutValues r (position c) (getRootWindowHeight srs)
-        else replicate 12 0
-  changeProperty32 d w a2 c2 propModeReplace [fromIntegral v]
+  wtype <- mkatom "_NET_WM_WINDOW_TYPE"
+  dock <- mkatom "_NET_WM_WINDOW_TYPE_DOCK"
+  changeProperty32 d w wtype atom propModeReplace [fi dock]
 
-  getProcessID >>= changeProperty32 d w p c1 propModeReplace . return . fromIntegral
+  when (allDesktops c) $ do
+    desktop <- mkatom "_NET_WM_DESKTOP"
+    changeProperty32 d w desktop card propModeReplace [0xffffffff]
+
+  pid  <- mkatom "_NET_WM_PID"
+  getProcessID >>= changeProperty32 d w pid card propModeReplace . return . fi
+
+setStruts' :: Display -> Window -> [Foreign.C.Types.CLong] -> IO ()
+setStruts' d w svs = do
+  let mkatom n = internAtom d n False
+  card <- mkatom "CARDINAL"
+  pstrut <- mkatom "_NET_WM_STRUT_PARTIAL"
+  strut <- mkatom "_NET_WM_STRUT"
+  changeProperty32 d w pstrut card propModeReplace svs
+  changeProperty32 d w strut card propModeReplace (take 4 svs)
+
+setStruts :: Rectangle -> Config -> Display -> Window -> [Rectangle] -> IO ()
+setStruts r c d w rs = do
+  let svs = map fi $ getStrutValues r (position c) (getRootWindowHeight rs)
+  setStruts' d w svs
 
 getRootWindowHeight :: [Rectangle] -> Int
 getRootWindowHeight srs = maximum (map getMaxScreenYCoord srs)
@@ -114,7 +129,7 @@ getRootWindowHeight srs = maximum (map getMaxScreenYCoord srs)
 
 getStrutValues :: Rectangle -> XPosition -> Int -> [Int]
 getStrutValues r@(Rectangle x y w h) p rwh =
-    case p of
+  case p of
     OnScreen _ p'   -> getStrutValues r p' rwh
     Top             -> [0, 0, st,  0, 0, 0, 0, 0, nx, nw,  0,  0]
     TopP    _ _     -> [0, 0, st,  0, 0, 0, 0, 0, nx, nw,  0,  0]
@@ -125,10 +140,10 @@ getStrutValues r@(Rectangle x y w h) p rwh =
     BottomW _ _     -> [0, 0,  0, sb, 0, 0, 0, 0,  0,  0, nx, nw]
     BottomSize   {} -> [0, 0,  0, sb, 0, 0, 0, 0,  0,  0, nx, nw]
     Static       {} -> getStaticStrutValues p rwh
-    where st = fi y + fi h
-          sb = rwh - fi y
-          nx = fi x
-          nw = fi (x + fi w - 1)
+  where st = fi y + fi h
+        sb = rwh - fi y
+        nx = fi x
+        nw = fi (x + fi w - 1)
 
 -- get some reaonable strut values for static placement.
 getStaticStrutValues :: XPosition -> Int -> [Int]
@@ -136,7 +151,7 @@ getStaticStrutValues (Static cx cy cw ch) rwh
     -- if the yPos is in the top half of the screen, then assume a Top
     -- placement, otherwise, it's a Bottom placement
     | cy < (rwh `div` 2) = [0, 0, st,  0, 0, 0, 0, 0, xs, xe,  0,  0]
-    | otherwise          = [0, 0,  0, sb, 0, 0, 0, 0,  0,  0, xs, xe]
+    | otherwise = [0, 0,  0, sb, 0, 0, 0, 0,  0,  0, xs, xe]
     where st = cy + ch
           sb = rwh - cy
           xs = cx -- a simple calculation for horizontal (x) placement
@@ -160,19 +175,14 @@ drawBorder b d p gc c wi ht =  case b of
 
 hideWindow :: Display -> Window -> IO ()
 hideWindow d w = do
-    a <- internAtom d "_NET_WM_STRUT_PARTIAL"    False
-    c <- internAtom d "CARDINAL"                 False
-    changeProperty32 d w a c propModeReplace $ replicate 12 0
+    setStruts' d w (replicate 12 0)
     unmapWindow d w >> sync d False
 
 showWindow :: Rectangle -> Config -> Display -> Window -> IO ()
-showWindow r cfg d w = do
-    srs <- getScreenInfo d
-    a   <- internAtom d "_NET_WM_STRUT_PARTIAL"    False
-    c   <- internAtom d "CARDINAL"                 False
-    changeProperty32 d w a c propModeReplace $ map fi $
-        getStrutValues r (position cfg) (getRootWindowHeight srs)
-    mapWindow d w >> sync d False
+showWindow r c d w = do
+    mapWindow d w
+    getScreenInfo d >>= setStruts r c d w
+    sync d False
 
 isMapped :: Display -> Window -> IO Bool
 isMapped d w = fmap ism $ getWindowAttributes d w

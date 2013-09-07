@@ -2,7 +2,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  XUtil
--- Copyright   :  (C) 2011, 2012 Jose Antonio Ortega Ruiz
+-- Copyright   :  (C) 2011, 2012, 2013 Jose Antonio Ortega Ruiz
 --                (C) 2007 Andrea Rossato
 -- License     :  BSD3
 --
@@ -32,13 +32,13 @@ import Control.Concurrent
 import Control.Monad.Trans
 import Control.Exception (SomeException, handle)
 import Foreign
--- import Foreign.C.Types
 import Graphics.X11.Xlib hiding (textExtents, textWidth)
 import qualified Graphics.X11.Xlib as Xlib (textExtents, textWidth)
 import Graphics.X11.Xlib.Extras
 import System.Mem.Weak ( addFinalizer )
 import System.Posix.Types (Fd(..))
 import System.IO
+
 #if defined XFT || defined UTF8
 # if __GLASGOW_HASKELL__ < 612
 import qualified System.IO.UTF8 as UTF8 (readFile,hGetLine)
@@ -183,8 +183,8 @@ printString dpy drw fs@(Xft font) _ fc bc x y s = do
 -- Windows Managers should not touch this kind of windows.
 newWindow :: Display -> Screen -> Window -> Rectangle -> Bool -> IO Window
 newWindow dpy scr rw (Rectangle x y w h) o = do
-  let visual   = defaultVisualOfScreen scr
-      attrmask = cWOverrideRedirect
+  let visual = defaultVisualOfScreen scr
+      attrmask = if o then cWOverrideRedirect else 0
   allocaSetWindowAttributes $
          \attributes -> do
            set_override_redirect attributes o

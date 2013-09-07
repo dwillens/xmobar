@@ -3,15 +3,15 @@
 About
 =====
 
-xmobar is a minimalistic, text based, status bar. It was originally
-designed and implemented by Andrea Rossato to work with [xmonad],
-but it's actually usable with any window-manager.
+xmobar is a minimalistic, mostly text based, status bar. It was
+originally designed and implemented by Andrea Rossato to work with
+[xmonad], but it's actually usable with any window-manager.
 
 xmobar was inspired by the [Ion3] status bar, and supports similar
-features, like dynamic color management, output templates, and
+features, like dynamic color management, icons, output templates, and
 extensibility through plugins.
 
-This page documents xmobar 0.16 (see [release notes]).
+This page documents xmobar 0.19 (see [release notes]).
 
 [This screenshot] shows xmobar running under [sawfish], with
 antialiased fonts. And [this one] is my desktop with [xmonad] and two
@@ -26,10 +26,13 @@ instances of xmobar.
 Bug Reports
 ===========
 
-To submit bug reports you can use the [bug tracker over at Google
-code] or send mail to our [Mailing list].
+To submit bug reports you can use the [bug tracker over at Github] or
+send mail to our [Mailing list].
 
-[bug tracker over at Google code]: http://code.google.com/p/xmobar/issues
+Note: the old bug tracker at Google code is deprecated.  Please use
+Github's for new bugs.
+
+[bug tracker over at Github]: https://github.com/jaor/xmobar/issues
 
 Installation
 ============
@@ -141,7 +144,9 @@ Otherwise, you'll need to install them yourself.
 
 `with_alsa`
 :    Support for ALSA sound cards. Enables the Volume plugin. Requires the
-     [alsa-mixer] package.
+     [alsa-mixer] package.  To install the latter, you'll need the
+     [libasound] C library and headers in your system (e.g., install
+     `libasound2-dev` in Debian-based systems).
 
 `with_datezone`
 :    Support for other timezones. Enables the DateZone plugin.
@@ -161,7 +166,9 @@ or
 
         xmobar &
 
-if you have the default configuration file saved as `~/.xmobarrc`
+if you have the default configuration file saved as
+`$XDG\_CONFIG\_HOME/xmobar/xmobarrc` (defaulting to
+`~/.config/xmobar/xmobarrc`), or `~/.xmobarrc`.
 
 ### Signal Handling
 
@@ -187,6 +194,10 @@ For the output template:
 
 - `<fc=#FF0000>string</fc>` will print `string` with `#FF0000` color
   (red).
+
+- `<icon=/path/to/icon.xbm/>` will insert the given bitmap.
+
+- `<action=command>` will execute given command.
 
 Other configuration options:
 
@@ -243,9 +254,19 @@ Other configuration options:
       can be toggled manually (for example using the dbus interface) or
       automatically (by a plugin) to make it reappear.
 
+`allDesktops`
+:     When set to True (the default), xmobar will tell the window manager
+      explicitily to be shown in all desktops, by setting
+      `_NET_WM_DESKTOP` to 0xffffffff.
+
+`overrideRedirect`
+:     If you're running xmobar in a tiling window manager, you might need
+      to set this option to `False` so that it behaves as a docked
+      application.  Defaults to `True`.
+
 `persistent`
 :     When True the window status is fixed i.e. hiding or revealing is not
-      possible. This option can be toggled at runtime.
+      possible. This option can be toggled at runtime. Defaults to False.
 
 `border`
 :     TopB, TopBM, BottomB, BottomBM, FullB, FullBM or NoBorder (default).
@@ -308,6 +329,7 @@ xmobar --help):
       -F fg color   --fgcolor=fg color     The foreground color. Default grey
       -o            --top                  Place xmobar at the top of the screen
       -b            --bottom               Place xmobar at the bottom of the screen
+      -d            --dock                 Try to start xmobar as a dock
       -a alignsep   --alignsep=alignsep    Separators for left, center and right text
                                            alignment. Default: '}{'
       -s char       --sepchar=char         The character used to separate commands in
@@ -430,6 +452,19 @@ operating system to execute a program with the name found in the
 template. If the execution is not successful an error will be
 reported.
 
+It's possible to insert in the global templates icon directives of the
+form:
+
+     <icon=/path/to/bitmap.xbm/>
+
+which will produce the expected result.
+
+It's also possible to use action directives of the form:
+
+     <action=command>
+
+which will be executed when clicked on.
+
 ## The `commands` Configuration Option
 
 The `commands` configuration option is a list of commands information
@@ -446,7 +481,14 @@ Example:
     [Run Memory ["-t","Mem: <usedratio>%"] 10, Run Swap [] 10]
 
 to run the Memory monitor plugin with the specified template, and the
-swap monitor plugin, with default options, every second.
+swap monitor plugin, with default options, every second.  And here's
+an example of a template for the commands above using an icon:
+
+    template="<icon=/home/jao/.xmobar/mem.xbm/><memory> <swap>"
+
+This example will run "xclock" command when date is clicked:
+
+    template="<action=xclock>%date%</action>
 
 The only internal available command is `Com` (see below Executing
 External Commands). All other commands are provided by plugins. xmobar
@@ -454,10 +496,8 @@ comes with some plugins, providing a set of system monitors, a
 standard input reader, an Unix named pipe reader, a configurable date
 plugin, and much more: we list all available plugins below.
 
-To remove them see below Installing/Removing a Plugin
-
 Other commands can be created as plugins with the Plugin
-infrastructure. See below Writing a Plugin
+infrastructure. See below.
 
 ## System Monitor Plugins
 
@@ -638,7 +678,7 @@ something like:
 
 ### `Wireless Interface Args RefreshRate`
 
-- Aliases to the interface name with the suffix "wi": thus, `Wirelss
+- Aliases to the interface name with the suffix "wi": thus, `Wireless
   "wlan0" []` can be used as `%wlan0wi%`
 - Args: default monitor arguments
 - Variables that can be used with the `-t`/`--template` argument:
@@ -654,7 +694,7 @@ something like:
 - Args: default monitor arguments
 - Variables that can be used with the `-t`/`--template` argument:
              `total`, `free`, `buffer`, `cache`, `rest`, `used`,
-             `usedratio`, `usedbar`, `freebar`
+             `usedratio`, `usedbar`, `freeratio`, `freebar`
 - Default template: `Mem: <usedratio>% (<cache>M)`
 
 ### `Swap Args RefreshRate`
@@ -701,6 +741,7 @@ something like:
   (these options, being specific to the monitor, are to be specified
   after a `--` in the argument list):
   - `-O`: string for AC "on" status (default: "On")
+  - `-i`: string for AC "idle" status (default: "On")
   - `-o`: string for AC "off" status (default: "Off")
   - `-L`: low power (`watts`) threshold (default: -12)
   - `-H`: high power threshold (default: -10)
@@ -720,7 +761,7 @@ something like:
          Run BatteryP ["BAT0"]
                       ["-t", "<acstatus><watts> (<left>%)",
                        "-L", "10", "-H", "80", "-p", "3",
-                       "--", "-O", "<fc=green>On</fc> - ", "-o", "",
+                       "--", "-O", "<fc=green>On</fc> - ", "-i", "",
                        "-L", "-15", "-H", "-5",
                        "-l", "red", "-m", "blue", "-h", "green"]
                       600
@@ -730,6 +771,25 @@ something like:
   the separator affect how `<watts>` is displayed. For this monitor,
   neither the generic nor the specific options have any effect on
   `<timeleft>`.
+
+  It is also possible to specify template variables in the `-O` and
+  `-o` switches, as in the following example:
+
+         Run BatteryP ["BAT0"]
+                      ["-t", "<acstatus>"
+                      , "-L", "10", "-H", "80"
+                      , "-l", "red", "-h", "green"
+                      , "--", "-O", "Charging", "-o", "Battery: <left>%"
+                      ] 10
+
+- The "idle" AC state is selected whenever the AC power entering the
+  battery is zero.
+
+### `BatteryN Dirs Args RefreshRate Alias`
+
+Works like `BatteryP`, but lets you specify an alias for the monitor
+other than "battery".  Useful in case you one separate monitors for
+more than one battery.
 
 ### `TopProc Args RefreshRate`
 
@@ -1261,11 +1321,12 @@ the greater Haskell community.
 In particular, xmobar [incorporates patches] by Ben Boeckel, Roman
 Cheplyaka, Patrick Chilton, John Goerzen, Reto Hablützel, Juraj
 Hercek, Tomas Janousek, Spencer Janssen, Jochen Keil, Lennart
-Kolmodin, Krzysztof Kosciuszkiewicz, Dmitry Kurochkin, Dmitry Malikov,
-Svein Ove, Martin Perner, Jens Petersen, Petr Rockai, Andrew
-Sackville-West, Alexander Solovyov, John Soros, Artem Tarasov, Sergei
-Trofimovich, Thomas Tuegel, Jan Vornberger, Daniel Wagner and Norbert
-Zeh.
+Kolmodin, Krzysztof Kosciuszkiewicz, Dmitry Kurochkin, Todd Lunter,
+Dmitry Malikov, David McLean, Edward O'Callaghan, Svein Ove, Martin
+Perner, Jens Petersen, Alexander Polakov, Petr Rockai, Peter Simons,
+Andrew Sackville-West, Alexander Solovyov, John Soros, Artem Tarasov,
+Sergei Trofimovich, Thomas Tuegel, Jan Vornberger, Daniel Wagner and
+Norbert Zeh.
 
 [incorporates patches]: http://www.ohloh.net/p/xmobar/contributors
 
@@ -1322,6 +1383,7 @@ Copyright &copy; 2010-2012 Jose Antonio Ortega Ruiz
 [i3status]: http://i3wm.org/i3status/
 [i3status manual]: http://i3wm.org/i3status/manpage.html#_using_i3status_with_xmobar
 [iwlib]: http://www.hpl.hp.com/personal/Jean_Tourrilhes/Linux/Tools.html
+[libasound]: http://packages.debian.org/stable/libasound2-dev
 [hinotify]: http://hackage.haskell.org/package/hinotify/
 [libmpd]: http://hackage.haskell.org/package/libmpd/
 [dbus]: http://hackage.haskell.org/package/dbus
