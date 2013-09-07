@@ -35,6 +35,9 @@ import Plugins.Monitors.CoreTemp
 import Plugins.Monitors.Disk
 import Plugins.Monitors.Top
 import Plugins.Monitors.Uptime
+import Plugins.Monitors.Transit
+import Plugins.Monitors.Transit.NextBus
+import Plugins.Monitors.Transit.MBTA
 #ifdef IWLIB
 import Plugins.Monitors.Wireless
 #endif
@@ -68,6 +71,8 @@ data Monitors = Weather      Station     Args Rate
               | TopProc      Args        Rate
               | TopMem       Args        Rate
               | Uptime       Args        Rate
+              | NextBus      TransitStopID  Args Rate
+              | MBTA         TransitStopID  Args Rate
 #ifdef IWLIB
               | Wireless Interface  Args Rate
 #endif
@@ -114,6 +119,8 @@ instance Exec Monitors where
     alias (DiskU _ _ _) = "disku"
     alias (DiskIO _ _ _) = "diskio"
     alias (Uptime _ _) = "uptime"
+    alias (NextBus (a, r, _) _ _) = a ++ r
+    alias (MBTA (_, _, s) _ _) = s
 #ifdef IWLIB
     alias (Wireless i _ _) = i ++ "wi"
 #endif
@@ -148,6 +155,8 @@ instance Exec Monitors where
     start (DiskU s a r) = runM a diskUConfig (runDiskU s) r
     start (DiskIO s a r) = startDiskIO s a r
     start (Uptime a r) = runM a uptimeConfig runUptime r
+    start (NextBus b a r) = runM a transitConfig (runNextBus b) r
+    start (MBTA s a r) = runM a transitConfig (runMBTA s) r
 #ifdef IWLIB
     start (Wireless i a r) = runM (a ++ [i]) wirelessConfig runWireless r
 #endif
